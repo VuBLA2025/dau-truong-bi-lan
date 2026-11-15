@@ -30,6 +30,12 @@
   }
 }
 
+html {
+  /* Chặn cuộn ngang bằng clip: clip KHÔNG tạo scroll container nên
+     không phá cuộn dọc (iOS cũ không hỗ trợ thì tự bỏ qua, vô hại). */
+  overflow-x: clip;
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -37,9 +43,10 @@ body {
   color: #f8fafc;
   user-select: none;
   -webkit-user-select: none;
-  /* Chỉ chặn cuộn ngang. KHÔNG đặt overflow:hidden ở đây: panel dài hơn
-     màn hình (nhất là trên điện thoại) nên phải cuộn dọc được. Stage
-     9:16 đã tự khóa cuộn bằng wrapper h-screen overflow-hidden của nó. */
-  overflow-x: hidden;
+  /* KHÔNG đặt bất kỳ overflow nào ở body: overflow:hidden từng khóa
+     cuộn panel; overflow-x:hidden cũng phá cuộn dọc trên Safari iPhone
+     (iOS tính overflow-y thành auto rồi khóa body lại — Chrome thì vẫn
+     cuộn bình thường nên test trên máy đệ không bắt được lỗi này).
+     Stage 9:16 tự khóa cuộn bằng wrapper h-screen overflow-hidden. */
   font-family: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
 }
