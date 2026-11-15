@@ -37,6 +37,9 @@ body {
   color: #f8fafc;
   user-select: none;
   -webkit-user-select: none;
-  overflow: hidden;
+  /* Chỉ chặn cuộn ngang. KHÔNG đặt overflow:hidden ở đây: panel dài hơn
+     màn hình (nhất là trên điện thoại) nên phải cuộn dọc được. Stage
+     9:16 đã tự khóa cuộn bằng wrapper h-screen overflow-hidden của nó. */
+  overflow-x: hidden;
   font-family: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
 }
