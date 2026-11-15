@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@layer utilities {
+  @keyframes marquee {
+    0% {
+      transform: translateX(0%);
+    }
+    100% {
+      transform: translateX(-100%);
+    }
+  }
+
+  @keyframes marquee2 {
+    0% {
+      transform: translateX(100%);
+    }
+    100% {
+      transform: translateX(0%);
+    }
+  }
+
+  .animate-marquee {
+    display: inline-flex;
+    animation: marquee 20s linear infinite;
+  }
+
+  .animate-marquee2 {
+    display: inline-flex;
+    animation: marquee2 20s linear infinite;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #020617;
+  color: #f8fafc;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+  font-family: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
+}

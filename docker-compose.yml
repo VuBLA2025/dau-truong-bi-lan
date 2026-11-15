@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  dau-truong-bi-lan:
+    build: .
+    container_name: dau-truong-bi-lan
+    restart: unless-stopped
+    ports:
+      - "3006:3006"
+    environment:
+      - PORT=3006
+      - NODE_ENV=production
+      - TTS_VOICE=vi-VN-NamMinhNeural
+      - TTS_PITCH=+4%
