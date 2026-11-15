@@ -94,11 +94,19 @@ export function usePlinkoGame() {
     });
   };
 
-  // Gửi lệnh xuống server để broadcast qua SSE cho mọi tab (panel + stage)
+  // Gửi lệnh xuống server để broadcast qua SSE cho mọi tab (panel + stage).
+  // Khi server đặt PANEL_KEY thì kèm luôn key (panel lưu trong
+  // sessionStorage lúc đăng nhập); server không đặt key thì header trống
+  // cũng qua. Đọc trực tiếp từ sessionStorage mỗi lần gọi để không bị
+  // stale closure (key chỉ có sau khi user đăng nhập).
   const postControl = useCallback((action: string, payload?: any) => {
+    let key = '';
+    try {
+      key = sessionStorage.getItem('bilan-panel-key') || '';
+    } catch {}
     fetch('/api/control', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-panel-key': key },
       body: JSON.stringify({ action, payload }),
     }).catch(() => {});
   }, []);
@@ -153,7 +161,16 @@ export function usePlinkoGame() {
   const applyPhaseChange = useCallback(
     (next: GamePhase, opts?: { broadcast?: boolean }) => {
       const prev = phaseRef.current;
-      if (prev === next) return;
+      if (prev === next) {
+        // Đã ở đúng phase rồi (bấm lại nút của phase hiện tại, hoặc nhận
+        // echo SSE của chính mình): không chạy hiệu ứng nữa, nhưng nếu là
+        // lệnh từ panel thì vẫn gửi sync để stage nào vừa mở bắt kịp ngay
+        // (sync mang giờ còn lại hiện tại của panel, không reset giờ).
+        if (opts?.broadcast) {
+          postControl('sync', { phase: next, timeLeft: timeLeftRef.current, roundNumber: roundRef.current });
+        }
+        return;
+      }
       setPhase(next);
       setTimeLeft(PHASE_DURATIONS[next]);
       // Cập nhật ref ngay lập tức (không chờ render) để interval/sync

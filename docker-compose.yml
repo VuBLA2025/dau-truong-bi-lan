@@ -1,14 +1,20 @@
-version: '3.8'
-
+# Đấu Trường Bi Lăn — Dokploy (build từ repo, giống mẫu cyber-bar)
+# Domain: bilan.bla.io.vn — service phải tên "app", Dokploy route tới PORT 4197.
 services:
-  dau-truong-bi-lan:
-    build: .
-    container_name: dau-truong-bi-lan
-    restart: unless-stopped
-    ports:
-      - "3006:3006"
+  app:
+    # Build từ Dockerfile Node trong bộ này — Dokploy build image này từ
+    # repo rồi chạy, không pull image có sẵn. KHÔNG được bỏ mục build:
+    # chỉ ghi image thì Dokploy lỗi ngay vì không có image để pull.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dau-truong-bi-lan:1.0.0
     environment:
-      - PORT=3006
-      - NODE_ENV=production
-      - TTS_VOICE=vi-VN-NamMinhNeural
-      - TTS_PITCH=+4%
+      PORT: "4197"
+      NODE_ENV: "production"
+      TTS_VOICE: "vi-VN-NamMinhNeural"
+      TTS_PITCH: "+4%"
+      # Mật khẩu panel — đặt giá trị thật trong phần Environment của Dokploy,
+      # KHÔNG ghi mật khẩu thật vào file này.
+      PANEL_KEY: "${PANEL_KEY}"
+    restart: unless-stopped

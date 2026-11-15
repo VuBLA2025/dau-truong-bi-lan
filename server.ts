@@ -24,6 +24,17 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3006;
 const TTS_VOICE = process.env.TTS_VOICE || 'vi-VN-NamMinhNeural';
 const TTS_PITCH = process.env.TTS_PITCH || '+4%';
 
+// Mật khẩu panel (đặt PANEL_KEY trong Environment của Dokploy).
+// Khi có PANEL_KEY, các lệnh điều khiển (kết nối TikTok, giả lập, điều
+// khiển ván) yêu cầu header x-panel-key đúng — nếu không ai mở được link
+// panel cũng điều khiển được game. Khi chưa đặt (chạy local) thì mở.
+const PANEL_KEY = process.env.PANEL_KEY || '';
+function requirePanelKey(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!PANEL_KEY) return next();
+  if (req.headers['x-panel-key'] === PANEL_KEY) return next();
+  return res.status(403).json({ success: false, error: 'Sai mật khẩu panel' });
+}
+
 app.use(express.json());
 
 // Enable CORS for development
@@ -97,7 +108,7 @@ const avatarOf = (d: any) =>
   '';
 
 // ---------- Connect / Disconnect TikTok ----------
-app.post('/api/tiktok/connect', async (req, res) => {
+app.post('/api/tiktok/connect', requirePanelKey, async (req, res) => {
   const { username } = req.body || {};
   if (!username || typeof username !== 'string') {
     return res.status(400).json({ success: false, error: 'Chưa nhập TikTok username' });
@@ -220,7 +231,7 @@ app.post('/api/tiktok/connect', async (req, res) => {
   }
 });
 
-app.post('/api/tiktok/disconnect', (_req, res) => {
+app.post('/api/tiktok/disconnect', requirePanelKey, (_req, res) => {
   try {
     activeConn?.disconnect();
   } catch {}
@@ -266,7 +277,7 @@ app.get('/api/avatar-proxy', async (req, res) => {
 });
 
 // ---------- Giả lập sự kiện để test (Hỗ trợ cả payload lồng data lẫn payload phẳng) ----------
-app.post('/api/test/emit', (req, res) => {
+app.post('/api/test/emit', requirePanelKey, (req, res) => {
   const { type, data, ...rest } = req.body || {};
   const actualType = type || (rest.giftName ? 'gift' : 'chat');
   const event = {
@@ -287,7 +298,7 @@ app.post('/api/test/emit', (req, res) => {
 });
 
 // ---------- Lệnh điều khiển giữa Dashboard -> Stage qua SSE ----------
-app.post('/api/control', (req, res) => {
+app.post('/api/control', requirePanelKey, (req, res) => {
   const { action, payload } = req.body || {};
   broadcast('control', { action, payload, timestamp: Date.now() });
   res.json({ success: true, action, payload });

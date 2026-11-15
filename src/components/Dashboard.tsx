@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePlinkoGame } from '../game/usePlinkoGame';
 import {
   Flame,
@@ -26,6 +26,67 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
   const [customSpeech, setCustomSpeech] = useState('');
   const [testNickname, setTestNickname] = useState('TuanAnh');
 
+  // Mật khẩu panel: server đặt PANEL_KEY (Dokploy) thì panel yêu cầu nhập
+  // đúng mới cho điều khiển; server không đặt key (chạy local) thì tự mở.
+  const [panelKey, setPanelKey] = useState(() => sessionStorage.getItem('bilan-panel-key') || '');
+  const [keyInput, setKeyInput] = useState('');
+  const [keyError, setKeyError] = useState('');
+  const [checkingKey, setCheckingKey] = useState(false);
+  const [keyChecked, setKeyChecked] = useState(false);
+
+  // Lúc mở panel: thử ping không cần key — nếu server cũng 200 tức là
+  // server không đặt PANEL_KEY (chạy local) -> khỏi bắt nhập mật khẩu.
+  useEffect(() => {
+    if (panelKey) {
+      setKeyChecked(true);
+      return;
+    }
+    fetch('/api/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'ping' }),
+    })
+      .then((res) => {
+        if (res.ok) setPanelKey('__open__');
+      })
+      .catch(() => {})
+      .finally(() => setKeyChecked(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mật khẩu sai (server trả 403) -> bắt nhập lại
+  const handleForbidden = () => {
+    sessionStorage.removeItem('bilan-panel-key');
+    setPanelKey('');
+    setKeyError('Sai mật khẩu panel, nhập lại nhé!');
+  };
+
+  // Đăng nhập panel: thử 1 lệnh ping vô hại để kiểm tra key đúng hay sai
+  // (server bỏ qua action lạ, chỉ kiểm tra key rồi trả 200/403).
+  const handleLogin = async () => {
+    if (!keyInput.trim()) return;
+    setCheckingKey(true);
+    setKeyError('');
+    try {
+      const res = await fetch('/api/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-panel-key': keyInput.trim() },
+        body: JSON.stringify({ action: 'ping' }),
+      });
+      if (!res.ok) {
+        setKeyError('Sai mật khẩu panel, nhập lại nhé!');
+        return;
+      }
+      sessionStorage.setItem('bilan-panel-key', keyInput.trim());
+      setPanelKey(keyInput.trim());
+      setKeyInput('');
+    } catch (err: any) {
+      setKeyError('Lỗi: ' + err.message);
+    } finally {
+      setCheckingKey(false);
+    }
+  };
+
   // ID người chơi test ỔN ĐỊNH theo tên (không random mỗi lần bấm):
   // điểm/quà của cùng một tên test gộp vào đúng 1 dòng trên BXH,
   // giống như 1 viewer TikTok thật chỉ có 1 uniqueId duy nhất.
@@ -39,9 +100,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
     try {
       const res = await fetch('/api/tiktok/connect', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-panel-key': panelKey },
         body: JSON.stringify({ username: tiktokUser }),
       });
+      if (res.status === 403) {
+        handleForbidden();
+        return;
+      }
       const data = await res.json();
       if (!data.success) {
         alert(data.error || 'Kết nối thất bại');
@@ -54,26 +119,72 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
   };
 
   const handleDisconnect = async () => {
-    await fetch('/api/tiktok/disconnect', { method: 'POST' });
+    const res = await fetch('/api/tiktok/disconnect', {
+      method: 'POST',
+      headers: { 'x-panel-key': panelKey },
+    });
+    if (res.status === 403) handleForbidden();
   };
 
   // Gửi lệnh giả lập chat/gift qua server
   const emitTest = async (type: string, data: any) => {
-    await fetch('/api/test/emit', {
+    const res = await fetch('/api/test/emit', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-panel-key': panelKey },
       body: JSON.stringify({ type, data }),
     });
+    if (res.status === 403) handleForbidden();
   };
 
   // Gửi lệnh điều khiển ván chơi/cổng qua server tới Stage
   const sendControl = async (action: string, payload?: any) => {
-    await fetch('/api/control', {
+    const res = await fetch('/api/control', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-panel-key': panelKey },
       body: JSON.stringify({ action, payload }),
     });
+    if (res.status === 403) handleForbidden();
   };
+
+  // Chưa nhập mật khẩu panel -> hiện màn hình khóa (không cho thấy dashboard)
+  if (!panelKey) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 p-6 flex items-center justify-center">
+        <div className="w-full max-w-sm bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4 shadow-xl">
+          <div>
+            <h1 className="text-xl font-black bg-gradient-to-r from-cyan-400 via-pink-400 to-yellow-300 bg-clip-text text-transparent">
+              ĐẤU TRƯỜNG BI LĂN
+            </h1>
+            <p className="text-sm text-slate-400">Bảng điều khiển — nhập mật khẩu panel để vào</p>
+          </div>
+          {!keyChecked ? (
+            <p className="text-sm text-slate-400">Đang kiểm tra...</p>
+          ) : (
+            <>
+              <input
+                type="password"
+                placeholder="Mật khẩu panel"
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleLogin();
+                }}
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-cyan-400"
+              />
+              {keyError && <p className="text-sm text-rose-400 font-semibold">{keyError}</p>}
+              <button
+                onClick={handleLogin}
+                disabled={checkingKey}
+                className="w-full bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 px-5 py-2.5 rounded-xl font-bold transition"
+              >
+                {checkingKey ? 'Đang kiểm tra...' : 'Vào bảng điều khiển'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 flex flex-col items-center">
