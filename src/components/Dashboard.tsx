@@ -26,6 +26,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
   const [customSpeech, setCustomSpeech] = useState('');
   const [testNickname, setTestNickname] = useState('TuanAnh');
 
+  // ID người chơi test ỔN ĐỊNH theo tên (không random mỗi lần bấm):
+  // điểm/quà của cùng một tên test gộp vào đúng 1 dòng trên BXH,
+  // giống như 1 viewer TikTok thật chỉ có 1 uniqueId duy nhất.
+  // Trước đây mỗi lần bấm sinh username random khác nhau nên cùng tên
+  // "TuanAnh" hiện cùng lúc ở QUÁN QUÂN + TOP 2 + TOP ĐẠI GIA.
+  const testUid = `test_${testNickname.trim().toLowerCase().replace(/\s+/g, '_') || 'tester'}`;
+
   const handleConnect = async () => {
     if (!tiktokUser.trim()) return alert('Vui lòng nhập TikTok username!');
     setConnecting(true);
@@ -169,20 +176,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
 
           <div className="flex flex-wrap gap-3 pt-1">
             <button
-              onClick={() => sendControl('setPhase', 'GATHERING')}
+              onClick={() => game.gotoPhase('GATHERING')}
               className="flex-1 min-w-[140px] bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 py-3 rounded-xl font-bold border border-amber-500/40 text-sm transition"
             >
               1. Khay Gom Bi (45s)
             </button>
             <button
-              onClick={() => sendControl('setPhase', 'RACING')}
+              onClick={() => game.gotoPhase('RACING')}
               className="flex-1 min-w-[140px] bg-emerald-600/40 hover:bg-emerald-600/60 text-emerald-300 py-3 rounded-xl font-bold border border-emerald-500/50 text-sm flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(16,185,129,0.3)] transition"
             >
               <Unlock className="w-4 h-4" />
               2. Mở Cổng Đua Ngay!
             </button>
             <button
-              onClick={() => sendControl('setPhase', 'SUMMARY')}
+              onClick={() => game.gotoPhase('SUMMARY')}
               className="flex-1 min-w-[140px] bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 py-3 rounded-xl font-bold border border-purple-500/40 text-sm transition"
             >
               3. Tổng Kết Ván
@@ -226,7 +233,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
             {/* 1. Comment 1 Thả vào khay */}
             <button
               onClick={() => {
-                const uid = testNickname.toLowerCase() + '_' + Math.floor(Math.random() * 1000);
+                const uid = testUid;
                 emitTest('chat', {
                   username: uid,
                   nickname: testNickname,
@@ -244,7 +251,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
             {/* 2. Thả Bi Lăn Ngay (Bypass Cổng) */}
             <button
               onClick={() => {
-                const uid = testNickname.toLowerCase() + '_' + Math.floor(Math.random() * 1000);
+                const uid = testUid;
                 sendControl('dropBall', {
                   username: uid,
                   nickname: testNickname,
@@ -263,7 +270,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
             {/* 3. Tặng Hoa hồng */}
             <button
               onClick={() => {
-                const uid = testNickname.toLowerCase() + '_' + Math.floor(Math.random() * 1000);
+                const uid = testUid;
                 emitTest('gift', {
                   username: uid,
                   nickname: testNickname,
@@ -283,7 +290,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
             {/* 4. Thả Bi Lửa */}
             <button
               onClick={() => {
-                const uid = testNickname.toLowerCase() + '_' + Math.floor(Math.random() * 1000);
+                const uid = testUid;
                 sendControl('dropBall', {
                   username: uid,
                   nickname: testNickname,
@@ -302,7 +309,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
             {/* 5. Thả Bi Sắt */}
             <button
               onClick={() => {
-                const uid = testNickname.toLowerCase() + '_' + Math.floor(Math.random() * 1000);
+                const uid = testUid;
                 sendControl('dropBall', {
                   username: uid,
                   nickname: testNickname,
@@ -333,7 +340,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
             {/* 7. Boss Trùm */}
             <button
               onClick={() => {
-                const uid = testNickname.toLowerCase() + '_' + Math.floor(Math.random() * 1000);
+                const uid = testUid;
                 sendControl('boss', {
                   user: testNickname,
                   avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`,
@@ -375,6 +382,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ game }) => {
               <span>Đọc Thử</span>
             </button>
           </div>
+
+          {/* Trạng thái giọng đọc để kiểm chứng được (trước đây bấm Đọc Thử
+              xong không có phản hồi gì trên trang, không biết đã đọc hay lỗi) */}
+          {game.speechStatus.state !== 'idle' && (
+            <p
+              className={`text-xs font-semibold px-1 ${
+                game.speechStatus.state === 'speaking' ? 'text-emerald-300' : 'text-rose-300'
+              }`}
+            >
+              {game.speechStatus.state === 'speaking'
+                ? `🔊 Đang đọc: "${game.speechStatus.text.slice(0, 80)}"`
+                : `⚠️ Không phát được giọng đọc — kiểm tra mạng/Edge TTS rồi bấm lại. Câu lỗi: "${game.speechStatus.text.slice(0, 80)}"`}
+            </p>
+          )}
         </div>
       </div>
     </div>

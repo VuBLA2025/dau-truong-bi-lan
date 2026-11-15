@@ -53,6 +53,9 @@ export class PlinkoEngine {
   private earthquakeTimeRemaining = 0;
   private earthquakeUser = '';
 
+  // Interval xả mưa bi vàng của BOSS (để hủy khi reset ván)
+  private bossInterval: ReturnType<typeof setInterval> | null = null;
+
   private animFrameId: number | null = null;
   private lastTime = 0;
 
@@ -360,6 +363,20 @@ export class PlinkoEngine {
     sound.playEarthquake();
   }
 
+  // Xóa toàn bộ bi khỏi bàn (dùng khi sang ván mới): bi đã lọt rổ thì
+  // engine tự xóa rồi, còn bi đang lăn / kẹt trên bàn / nằm trong khay
+  // phải xóa tay, nếu không bi cũ nằm lại sang ván mới.
+  public clearBalls() {
+    if (this.bossInterval) {
+      clearInterval(this.bossInterval);
+      this.bossInterval = null;
+    }
+    for (const { body } of this.balls.values()) {
+      Composite.remove(this.engine.world, body);
+    }
+    this.balls.clear();
+  }
+
   public triggerBoss(username: string, avatar: string) {
     const center = { x: CANVAS_WIDTH / 2, y: 600 };
     for (const { body } of this.balls.values()) {
@@ -368,7 +385,7 @@ export class PlinkoEngine {
     }
 
     let count = 0;
-    const interval = setInterval(() => {
+    this.bossInterval = setInterval(() => {
       this.dropBall(
         {
           username,
@@ -382,7 +399,10 @@ export class PlinkoEngine {
         true
       );
       count++;
-      if (count >= 20) clearInterval(interval);
+      if (count >= 20 && this.bossInterval) {
+        clearInterval(this.bossInterval);
+        this.bossInterval = null;
+      }
     }, 100);
   }
 
@@ -658,7 +678,15 @@ export class PlinkoEngine {
       ctx.fillStyle = bucketGrad;
       ctx.fillRect(left, top, b.width, 160);
 
-      ctx.font = 'bold 36px "Orbitron", sans-serif';
+      // Tự thu nhỏ chữ nhãn rổ cho vừa chiều rộng rổ (nhãn "x100 BOSS"
+      // dài hơn các rổ khác, cỡ 36px sẽ tràn ra ngoài mép phải của bàn).
+      let fontSize = 36;
+      ctx.font = `bold ${fontSize}px "Orbitron", sans-serif`;
+      const maxLabelWidth = b.width - 12;
+      while (fontSize > 20 && ctx.measureText(b.label).width > maxLabelWidth) {
+        fontSize -= 2;
+        ctx.font = `bold ${fontSize}px "Orbitron", sans-serif`;
+      }
       ctx.fillStyle = '#ffffff';
       ctx.shadowColor = b.color;
       ctx.shadowBlur = 16;

@@ -7,7 +7,22 @@ const GATHERING_TIME = 45;
 const RACING_TIME = 120;
 const SUMMARY_TIME = 15;
 
+const PHASE_DURATIONS: Record<GamePhase, number> = {
+  GATHERING: GATHERING_TIME,
+  RACING: RACING_TIME,
+  SUMMARY: SUMMARY_TIME,
+};
+
+// Panel (dashboard) là "leader": chạy vòng lặp tự động + broadcast đồng bộ.
+// Stage (tab ?stage=1) là "follower": chỉ đếm ngược, đổi phase theo lệnh
+// từ panel qua SSE. Nếu quá 15s không nhận được sync/control nào thì stage
+// tự chạy vòng lặp dự phòng để stage vẫn chơi được khi mở một mình
+// (ví dụ chỉ mở stage trên OBS mà quên mở panel).
+const SYNC_EVERY_TICKS = 5;
+const STAGE_ALONE_TIMEOUT_MS = 15000;
+
 export function usePlinkoGame() {
+  const isStage = typeof window !== 'undefined' && window.location.search.includes('stage=1');
   const [phase, setPhase] = useState<GamePhase>('GATHERING');
   const [timeLeft, setTimeLeft] = useState<number>(GATHERING_TIME);
   const [roundNumber, setRoundNumber] = useState<number>(1);
@@ -29,9 +44,26 @@ export function usePlinkoGame() {
   const engineRef = useRef<PlinkoEngine | null>(null);
   const cooldowns = useRef<Map<string, number>>(new Map());
 
-  // MC Voice TTS queue
+  // Mirror state vào ref để dùng trong interval / SSE handler (tránh stale closure)
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const timeLeftRef = useRef(timeLeft);
+  timeLeftRef.current = timeLeft;
+  const scoresRef = useRef(scores);
+  scoresRef.current = scores;
+  const roundRef = useRef(roundNumber);
+  roundRef.current = roundNumber;
+  // Lần cuối stage nhận được lệnh/sync từ panel (để biết panel còn sống không)
+  const lastSyncAtRef = useRef(Date.now());
+  const syncTickRef = useRef(0);
+
+  // MC Voice TTS queue + trạng thái để panel hiển thị (kiểm chứng được)
   const isSpeakingRef = useRef(false);
   const speechQueueRef = useRef<string[]>([]);
+  const [speechStatus, setSpeechStatus] = useState<{ state: 'idle' | 'speaking' | 'error'; text: string }>({
+    state: 'idle',
+    text: '',
+  });
 
   const speak = useCallback((text: string) => {
     if (!text) return;
@@ -43,20 +75,33 @@ export function usePlinkoGame() {
     if (isSpeakingRef.current || speechQueueRef.current.length === 0) return;
     const nextText = speechQueueRef.current.shift()!;
     isSpeakingRef.current = true;
+    setSpeechStatus({ state: 'speaking', text: nextText });
 
     const audio = new Audio(`/api/tts?text=${encodeURIComponent(nextText)}&rate=1.25`);
     audio.onended = () => {
       isSpeakingRef.current = false;
+      setSpeechStatus({ state: 'idle', text: '' });
       setTimeout(processSpeechQueue, 350);
     };
     audio.onerror = () => {
       isSpeakingRef.current = false;
+      setSpeechStatus({ state: 'error', text: nextText });
       setTimeout(processSpeechQueue, 200);
     };
     audio.play().catch(() => {
       isSpeakingRef.current = false;
+      setSpeechStatus({ state: 'error', text: nextText });
     });
   };
+
+  // Gửi lệnh xuống server để broadcast qua SSE cho mọi tab (panel + stage)
+  const postControl = useCallback((action: string, payload?: any) => {
+    fetch('/api/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, payload }),
+    }).catch(() => {});
+  }, []);
 
   // 1. Gắn Engine
   const attachEngine = useCallback((engine: PlinkoEngine) => {
@@ -87,43 +132,117 @@ export function usePlinkoGame() {
     };
   }, []);
 
-  // 2. Vòng lặp Game Loop
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev > 1) return prev - 1;
+  // Kết thúc ván: chốt quán quân, xóa điểm, xóa toàn bộ bi khỏi bàn
+  // (bi chưa kịp lọt rổ / còn kẹt trên bàn cũng bị xóa, tránh bi cũ
+  // nằm lại sang ván mới).
+  const startNewRound = useCallback(() => {
+    const sorted = Array.from(scoresRef.current.values()).sort((a, b) => b.score - a.score);
+    if (sorted[0]) {
+      setLastChampion(sorted[0]);
+    }
+    setScores(new Map());
+    setRoundNumber((r) => r + 1);
+    engineRef.current?.clearBalls();
+  }, []);
 
-        if (phase === 'GATHERING') {
-          setPhase('RACING');
-          engineRef.current?.openGate();
-          speak('Cổng đua đã mở! Toàn bộ bi túa xuống rồi anh em ơi!');
-          return RACING_TIME;
-        } else if (phase === 'RACING') {
-          setPhase('SUMMARY');
-          engineRef.current?.closeGate();
-          speak('Hết giờ đua! Hãy cùng xem ai là nhà vô địch ván này!');
-          try {
-            confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
-          } catch {}
-          return SUMMARY_TIME;
-        } else {
-          setPhase('GATHERING');
-          setRoundNumber((r) => r + 1);
-          setScores((curScores) => {
-            const sorted = Array.from(curScores.values()).sort((a, b) => b.score - a.score);
-            if (sorted[0]) {
-              setLastChampion(sorted[0]);
-            }
-            return new Map();
-          });
-          speak('Ván mới bắt đầu! Gõ phím 1 để thả avatar của bạn vào đường đua!');
-          return GATHERING_TIME;
-        }
+  // Chuyển phase: đổi phase + reset đồng hồ về đủ thời lượng của phase mới,
+  // chạy hiệu ứng (cổng, giọng MC, pháo giấy, reset ván).
+  // broadcast=true (chỉ panel làm) thì gửi lệnh xuống server để stage đi theo.
+  // Nếu đã ở đúng phase đó rồi thì không làm gì (tránh chạy hiệu ứng 2 lần
+  // khi nhận lại echo SSE của chính mình).
+  const applyPhaseChange = useCallback(
+    (next: GamePhase, opts?: { broadcast?: boolean }) => {
+      const prev = phaseRef.current;
+      if (prev === next) return;
+      setPhase(next);
+      setTimeLeft(PHASE_DURATIONS[next]);
+      // Cập nhật ref ngay lập tức (không chờ render) để interval/sync
+      // đọc được giá trị mới — nếu không, tick interval đọc ref cũ
+      // sẽ ghi đè timeLeft vừa reset (lỗi từng thấy: SUMMARY mà đồng hồ 90s).
+      phaseRef.current = next;
+      timeLeftRef.current = PHASE_DURATIONS[next];
+
+      if (next === 'RACING') {
+        engineRef.current?.openGate();
+        speak('Cổng đua đã mở! Toàn bộ bi túa xuống rồi anh em ơi!');
+      } else if (next === 'SUMMARY') {
+        engineRef.current?.closeGate();
+        speak('Hết giờ đua! Hãy cùng xem ai là nhà vô địch ván này!');
+        try {
+          confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+        } catch {}
+      } else {
+        // GATHERING = ván mới
+        engineRef.current?.closeGate();
+        startNewRound();
+        speak('Ván mới bắt đầu! Gõ phím 1 để thả avatar của bạn vào đường đua!');
+      }
+
+      if (opts?.broadcast) {
+        postControl('setPhase', next);
+      }
+    },
+    [postControl, speak, startNewRound]
+  );
+
+  // Nút panel bấm: đổi phase ngay tại chỗ + broadcast cho stage đi theo
+  const gotoPhase = useCallback(
+    (p: GamePhase) => {
+      applyPhaseChange(p, { broadcast: true });
+    },
+    [applyPhaseChange]
+  );
+
+  // 2. Vòng lặp Game Loop — PANEL là leader, STAGE chỉ đếm ngược theo sau
+  useEffect(() => {
+    // Panel gửi sync ngay khi mở để stage vừa mở theo kịp phase hiện tại
+    if (!isStage) {
+      postControl('sync', {
+        phase: phaseRef.current,
+        timeLeft: timeLeftRef.current,
+        roundNumber: roundRef.current,
       });
+    }
+
+    const timer = setInterval(() => {
+      // Đếm ngược bằng functional updater: luôn tính trên state mới nhất,
+      // không bao giờ ghi đè một timeLeft vừa được set mới từ SSE
+      // (tránh race interval-vs-SSE từng làm SUMMARY hiện 90s).
+      setTimeLeft((prev) => Math.max(0, prev - 1));
+
+      if (isStage) {
+        // Stage hết giờ mà panel im lặng quá 15s (panel chưa mở hoặc mất
+        // SSE) -> tự chạy vòng lặp dự phòng để stage vẫn chơi được một mình.
+        if (timeLeftRef.current <= 0 && Date.now() - lastSyncAtRef.current > STAGE_ALONE_TIMEOUT_MS) {
+          const cur = phaseRef.current;
+          const next: GamePhase = cur === 'GATHERING' ? 'RACING' : cur === 'RACING' ? 'SUMMARY' : 'GATHERING';
+          applyPhaseChange(next, { broadcast: false });
+        }
+        return;
+      }
+
+      // Panel: broadcast sync định kỳ (5s) để stage luôn khớp phase/giờ/ván,
+      // kể cả khi stage mở muộn.
+      syncTickRef.current += 1;
+      if (syncTickRef.current % SYNC_EVERY_TICKS === 0) {
+        postControl('sync', {
+          phase: phaseRef.current,
+          timeLeft: timeLeftRef.current,
+          roundNumber: roundRef.current,
+        });
+      }
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [phase, speak]);
+  }, [isStage, applyPhaseChange, postControl]);
+
+  // Panel: đếm ngược về 0 -> tự chuyển phase + broadcast cho stage đi theo
+  useEffect(() => {
+    if (isStage || timeLeft > 0) return;
+    const cur = phaseRef.current;
+    const next: GamePhase = cur === 'GATHERING' ? 'RACING' : cur === 'RACING' ? 'SUMMARY' : 'GATHERING';
+    applyPhaseChange(next, { broadcast: true });
+  }, [isStage, timeLeft, applyPhaseChange]);
 
   // 3. Xử lý Thả bi
   const handleDropBall = useCallback(
@@ -243,10 +362,30 @@ export function usePlinkoGame() {
     es.addEventListener('control', (e) => {
       try {
         const data = JSON.parse(e.data);
+        // Mọi lệnh control đều chứng tỏ panel còn sống (cho fallback của stage)
+        lastSyncAtRef.current = Date.now();
+
         if (data.action === 'setPhase') {
-          setPhase(data.payload);
-          if (data.payload === 'RACING') engineRef.current?.openGate();
-          if (data.payload === 'GATHERING') engineRef.current?.closeGate();
+          const p = data.payload as GamePhase;
+          if (p === 'GATHERING' || p === 'RACING' || p === 'SUMMARY') {
+            // Đổi phase + reset đồng hồ về đủ thời lượng của phase mới
+            applyPhaseChange(p, { broadcast: false });
+          }
+        } else if (data.action === 'sync') {
+          // Đồng bộ định kỳ từ panel: phase + giờ còn lại + số ván
+          const p = data.payload || {};
+          if (p.phase === 'GATHERING' || p.phase === 'RACING' || p.phase === 'SUMMARY') {
+            const syncPhase = p.phase as GamePhase;
+            if (syncPhase !== phaseRef.current) {
+              applyPhaseChange(syncPhase, { broadcast: false });
+            }
+            if (typeof p.timeLeft === 'number') {
+              setTimeLeft(Math.max(0, Math.min(PHASE_DURATIONS[syncPhase], p.timeLeft)));
+            }
+            if (typeof p.roundNumber === 'number') {
+              setRoundNumber(p.roundNumber);
+            }
+          }
         } else if (data.action === 'openGate') {
           engineRef.current?.openGate();
         } else if (data.action === 'closeGate') {
@@ -270,7 +409,7 @@ export function usePlinkoGame() {
     });
 
     return () => es.close();
-  }, [handleDropBall, speak]);
+  }, [handleDropBall, speak, applyPhaseChange]);
 
   const topPlayers = Array.from(scores.values()).sort((a, b) => b.score - a.score);
   const topDonator = Array.from(scores.values()).sort((a, b) => b.totalGifts - a.totalGifts)[0];
@@ -284,9 +423,11 @@ export function usePlinkoGame() {
     topDonator,
     lastChampion,
     liveStats,
+    speechStatus,
     attachEngine,
     handleDropBall,
     setPhase,
+    gotoPhase,
     speak,
     toggleGate: () => {
       if (engineRef.current?.isGateOpen) {
